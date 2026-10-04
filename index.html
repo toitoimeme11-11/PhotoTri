@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Tri Photos</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#111111">
+<link rel="icon" href="icon-192.png">
+<style>
+*{box-sizing:border-box}html,body{height:100%;margin:0}
+body{background:#111;color:#eee;font-family:system-ui,sans-serif;overflow:hidden;-webkit-user-select:none;user-select:none}
+.screen{display:none;height:100%;padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom);flex-direction:column;align-items:center;justify-content:center;gap:14px}
+.screen.on{display:flex}
+h1{margin:0 0 8px;font-size:1.5rem}
+input{width:260px;padding:12px;border-radius:8px;border:1px solid #444;background:#222;color:#eee;font-size:1rem}
+label{display:flex;gap:10px;align-items:center}label span{width:28px;font-size:1.4rem;text-align:center}
+button{padding:12px 22px;border:0;border-radius:8px;background:#3b82f6;color:#fff;font-size:1rem}
+button.sec{background:#333}
+#sort{padding:0;position:relative;justify-content:stretch}
+#stage{flex:1;width:100%;display:flex;align-items:center;justify-content:center;touch-action:none;position:relative}
+#img{max-width:100%;max-height:100%;object-fit:contain;will-change:transform}
+.tag{position:absolute;padding:8px 14px;border-radius:20px;background:#0008;font-size:.95rem;opacity:.55;pointer-events:none;transition:.1s}
+.tag.hot{opacity:1;background:#3b82f6;transform:scale(1.15)}
+#t-up{top:12px;left:50%;transform:translateX(-50%)}#t-down{bottom:64px;left:50%;transform:translateX(-50%)}
+#t-left{left:8px;top:50%}#t-right{right:8px;top:50%}
+#t-up.hot{transform:translateX(-50%) scale(1.15)}#t-down.hot{transform:translateX(-50%) scale(1.15)}
+#bar{width:100%;display:flex;justify-content:space-between;align-items:center;padding:8px 12px;font-size:.9rem;color:#aaa}
+</style></head><body>
+
+<div id="setup" class="screen on">
+  <h1>📷 Tri Photos</h1>
+  <button id="pick">Choisir le dossier de photos</button>
+  <div id="picked" style="color:#aaa"></div>
+  <label><span>↑</span><input id="n-up" value="à ne pas toucher"></label>
+  <label><span>↓</span><input id="n-down" value="corbeille"></label>
+  <label><span>←</span><input id="n-left" value="à recolorer"></label>
+  <label><span>→</span><input id="n-right" value="à recadrer"></label>
+  <button id="start" disabled>Commencer le tri</button>
+  <div id="err" style="color:#f87171;max-width:320px;text-align:center"></div>
+</div>
+
+<div id="sort" class="screen">
+  <div id="stage">
+    <img id="img" alt="">
+    <div class="tag" id="t-up"></div><div class="tag" id="t-down"></div>
+    <div class="tag" id="t-left"></div><div class="tag" id="t-right"></div>
+  </div>
+  <div id="bar"><button class="sec" id="undo">↶ Annuler</button><span id="count"></span><span id="pend"></span><button class="sec" id="stop">Terminer</button></div>
+</div>
+
+<div id="done" class="screen">
+  <h1>Tri terminé ✅</h1>
+  <div id="sum" style="line-height:1.8"></div>
+  <button id="again">Nouveau tri</button>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const D=['up','down','left','right'];
+let root,files=[],names={},i=0,history=[],queue=[],running=false,errors=0,url=null,busy=false;
+
+function show(s){document.querySelectorAll('.screen').forEach(e=>e.classList.toggle('on',e.id===s))}
+if(!window.showDirectoryPicker){$('err').textContent="Ce navigateur ne permet pas d'accéder aux dossiers. Utilise Chrome (version récente) sur Android.";$('pick').disabled=true}
+
+$('pick').onclick=async()=>{
+  try{
+    root=await showDirectoryPicker({mode:'readwrite'});
+    files=[];
+    for await(const [n,h] of root.entries())
+      if(h.kind==='file'&&/\.(jpe?g|png|webp|gif|avif)$/i.test(n))files.push(h);
+    files.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+    $('picked').textContent=root.name+' : '+files.length+' photos';
+    $('start').disabled=!files.length;
+  }catch(e){}
+};
+
+$('start').onclick=()=>{
+  D.forEach(d=>{names[d]=$('n-'+d).value.trim()||d;$('t-'+d).textContent={up:'↑ ',down:'↓ ',left:'← ',right:'→ '}[d]+names[d]});
+  i=0;history=[];queue=[];errors=0;cache={};show('sort');showPhoto();
+};
+
+let cache={};
+function getUrl(k){if(k<0||k>=files.length)return null;if(!cache[k])cache[k]=files[k].getFile().then(f=>URL.createObjectURL(f));return cache[k]}
+async function showPhoto(){
+  if(i>=files.length)return finish();
+  const k=i,u=await getUrl(k);if(k!==i)return;
+  const img=$('img');
+  img.style.transition='none';img.style.opacity=0;img.style.transform='scale(.96)';
+  img.src=u;try{await img.decode()}catch(e){}
+  if(k!==i)return;
+  void img.offsetWidth;
+  img.style.transition='transform .22s ease-out,opacity .22s ease-out';
+  img.style.opacity=1;img.style.transform='';
+  $('count').textContent=(k+1)+' / '+files.length;
+  busy=false;
+  getUrl(k+1);
+  Object.keys(cache).forEach(x=>{if(+x<k-1){cache[x].then(URL.revokeObjectURL);delete cache[x]}});
+}
+
+function sortTo(d){
+  if(busy||i>=files.length)return;busy=true;
+  const job={h:files[i],name:names[d],cancelled:false,done:false,failed:false};
+  history.push(job);queue.push(job);i++;pump();
+  const img=$('img'),o={up:[0,-1],down:[0,1],left:[-1,0],right:[1,0]}[d];
+  img.style.transition='transform .16s ease-in,opacity .16s ease-in';
+  img.style.transform=`translate(${o[0]*120}px,${o[1]*120}px)`;img.style.opacity=0;
+  setTimeout(showPhoto,130);
+}
+
+async function pump(){
+  if(running)return;running=true;
+  while(queue.length){
+    updatePend();
+    const job=queue.shift();if(job.cancelled)continue;
+    try{
+      const f=await job.h.getFile();
+      const sub=await root.getDirectoryHandle(job.name,{create:true});
+      const fh=await sub.getFileHandle(job.h.name,{create:true});
+      const w=await fh.createWritable();
+      await f.stream().pipeTo(w);
+      job.done=true;
+      if(job.cancelled)await sub.removeEntry(job.h.name).catch(()=>{});
+    }catch(e){job.failed=true;errors++}
+  }
+  running=false;updatePend();
+  if(i>=files.length&&$('sort').classList.contains('on'))finish();
+}
+function updatePend(){const n=queue.length+(running?1:0);$('pend').textContent=n>1?'⏳ '+(n-1)+' copie(s) en cours':''}
+
+$('undo').onclick=async()=>{
+  const job=history.pop();if(!job)return;
+  i--;job.cancelled=true;
+  if(job.done){try{const s=await root.getDirectoryHandle(job.name);await s.removeEntry(job.h.name)}catch(e){}}
+  showPhoto();
+};
+
+async function finish(){
+  if(running||queue.length){show('done');$('sum').textContent='Fin des copies en cours…';return}
+  const c={};history.filter(j=>j.done&&!j.cancelled).forEach(j=>c[j.name]=(c[j.name]||0)+1);
+  $('sum').innerHTML=Object.entries(c).map(([n,k])=>`<b>${n}</b> : ${k} photo(s)`).join('<br>')
+    +(errors?`<br><span style="color:#f87171">${errors} erreur(s) de copie</span>`:'')
+    +`<br><small style="color:#aaa">Les photos d'origine n'ont pas été modifiées.</small>`;
+  show('done');
+}
+$('stop').onclick=()=>{i=files.length;finish()};
+$('again').onclick=()=>show('setup');
+window.addEventListener('beforeunload',e=>{if(running||queue.length){e.preventDefault();e.returnValue=''}});
+
+// Swipe
+let sx,sy,drag=false;const stage=$('stage'),img=$('img');
+function dirOf(dx,dy){return Math.abs(dx)>Math.abs(dy)?(dx>0?'right':'left'):(dy>0?'down':'up')}
+stage.onpointerdown=e=>{sx=e.clientX;sy=e.clientY;drag=true;stage.setPointerCapture(e.pointerId);img.style.transition='none'};
+stage.onpointermove=e=>{
+  if(!drag||busy)return;const dx=e.clientX-sx,dy=e.clientY-sy;
+  img.style.transform=`translate(${dx*.25}px,${dy*.25}px)`;
+  const far=Math.hypot(dx,dy)>90,d=dirOf(dx,dy);
+  D.forEach(k=>$('t-'+k).classList.toggle('hot',far&&k===d));
+};
+stage.onpointerup=e=>{
+  if(!drag)return;drag=false;
+  const dx=e.clientX-sx,dy=e.clientY-sy;
+  D.forEach(k=>$('t-'+k).classList.remove('hot'));
+  if(Math.hypot(dx,dy)>90)sortTo(dirOf(dx,dy));
+  else{img.style.transition='transform .2s ease-out';img.style.transform=''}
+};
+addEventListener('keydown',e=>{const m={ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right'}[e.key];if(m&&$('sort').classList.contains('on'))sortTo(m)});
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script></body></html>
